@@ -182,4 +182,4 @@ Compatible with:
 
 ## License
 
-MIT
+AGPLv3
