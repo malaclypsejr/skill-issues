@@ -71,14 +71,12 @@ pub fn compute_suspicion_level(content: &str) -> (SuspicionLevel, usize, usize) 
 
     for ch in content.chars() {
         // Skip VS-15/VS-16 after emoji base (standard emoji presentation)
-        if is_emoji_variation_selector(ch) {
-            if let Some(prev) = prev_char {
-                if invisible_chars::InvisibleCharactersRule::is_emoji_base(prev) {
+        if is_emoji_variation_selector(ch)
+            && let Some(prev) = prev_char
+                && invisible_chars::InvisibleCharactersRule::is_emoji_base(prev) {
                     prev_char = Some(ch);
                     continue;
                 }
-            }
-        }
 
         if is_invisible_codepoint(ch) {
             total_invisible += 1;

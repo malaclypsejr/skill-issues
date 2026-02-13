@@ -43,7 +43,7 @@ impl InvisibleCharactersRule {
     ///  - Miscellaneous Symbols & Pictographs, Supplemental Symbols
     ///  - Flags (regional indicators), skin-tone modifiers
     ///  - Common text characters with emoji presentation (digits, #, *, ©, ®, ‼, etc.)
-    pub fn is_emoji_base(ch: char) -> bool {
+    pub const fn is_emoji_base(ch: char) -> bool {
         let cp = ch as u32;
         matches!(cp,
             // ASCII characters with emoji variants (#, *, 0-9)
@@ -245,14 +245,12 @@ impl Rule for InvisibleCharactersRule {
 
                 // Skip VS-15/VS-16 when they follow an emoji base character.
                 // This is standard emoji presentation formatting (e.g. ❤\uFE0F).
-                if Self::is_emoji_variation_selector(ch) {
-                    if let Some(prev) = prev_char {
-                        if Self::is_emoji_base(prev) {
+                if Self::is_emoji_variation_selector(ch)
+                    && let Some(prev) = prev_char
+                        && Self::is_emoji_base(prev) {
                             prev_char = Some(ch);
                             continue;
                         }
-                    }
-                }
 
                 // Check for Unicode tag characters
                 if Self::is_unicode_tag(ch) {
