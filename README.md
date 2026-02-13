@@ -6,6 +6,11 @@ A linter for skill markdown files used by Claude Code and similar AI systems. Th
 
 Skill files are markdown documents that define behaviors and capabilities for AI assistants. Since these files are parsed as instructions, they can be vectors for prompt injection attacks. This linter helps catch suspicious patterns before they reach the AI.
 
+## Approach
+
+This tool is extremely conservative. It's essentially looking for ASCII markdown files with some allowance for emojis.
+It's unlikely to be friendly for languages other than English.
+
 ## Installation
 
 ```bash
