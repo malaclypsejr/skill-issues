@@ -19,8 +19,8 @@ impl Rule for Base64EncodedRule {
         for (line_num, line) in content.lines().enumerate() {
             for mat in re.find_iter(line) {
                 // Check if it's valid base64
-                if let Ok(decoded) = engine.decode(mat.as_str()) {
-                    if let Ok(text) = String::from_utf8(decoded) {
+                if let Ok(decoded) = engine.decode(mat.as_str())
+                    && let Ok(text) = String::from_utf8(decoded) {
                         issues.push(Issue {
                             severity: Severity::Warning,
                             line: line_num + 1,
@@ -32,7 +32,6 @@ impl Rule for Base64EncodedRule {
                             rule: self.name().to_string(),
                         });
                     }
-                }
             }
         }
         issues

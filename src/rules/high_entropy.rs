@@ -5,6 +5,7 @@ use regex::Regex;
 use super::{Issue, Rule, Severity};
 
 /// Calculate Shannon entropy of a string in bits per character
+#[allow(clippy::cast_precision_loss)] // Precision loss at 2^52 is irrelevant for entropy math
 fn calculate_entropy(s: &str) -> f64 {
     if s.is_empty() {
         return 0.0;
@@ -28,6 +29,7 @@ fn calculate_entropy(s: &str) -> f64 {
 
 /// Calculate chi-square statistic for character distribution
 /// Compares observed distribution against expected uniform distribution
+#[allow(clippy::cast_precision_loss)] // Precision loss at 2^52 is irrelevant for chi-square math
 fn calculate_chi_square(s: &str) -> f64 {
     if s.is_empty() {
         return 0.0;

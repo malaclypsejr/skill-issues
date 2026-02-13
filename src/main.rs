@@ -10,11 +10,12 @@ use serde_sarif::sarif;
 use walkdir::WalkDir;
 
 mod rules;
-use rules::*;
+use rules::{Issue, SuspicionLevel, Rule, invisible_chars, non_printable, html_comments, excessive_whitespace, suspicious_keywords, unicode_homoglyphs, mixed_scripts, url_encoding, excessive_backticks, base64_encoded, high_entropy, Severity, compute_suspicion_level};
 
 #[derive(Parser)]
 #[command(name = "skill-issues")]
 #[command(about = "Linter for skill markdown files - prevents prompt injection")]
+#[allow(clippy::struct_excessive_bools)] // CLI flags are naturally boolean
 struct Cli {
     /// Path to scan (file or directory)
     #[arg(default_value = ".")]
@@ -85,6 +86,7 @@ struct Summary {
     total_warnings: usize,
 }
 
+#[derive(Clone, Copy)]
 struct LinterConfig {
     max_empty_lines: usize,
     include_cc: bool,
@@ -138,11 +140,10 @@ impl Linter {
 fn is_markdown_file(path: &Path) -> bool {
     path.extension()
         .and_then(|e| e.to_str())
-        .map(|e| matches!(e.to_lowercase().as_str(), "md" | "markdown"))
-        .unwrap_or(false)
+        .is_some_and(|e| matches!(e.to_lowercase().as_str(), "md" | "markdown"))
 }
 
-fn severity_to_sarif_level(severity: &Severity) -> sarif::ResultLevel {
+const fn severity_to_sarif_level(severity: &Severity) -> sarif::ResultLevel {
     match severity {
         Severity::Error => sarif::ResultLevel::Error,
         Severity::Warning => sarif::ResultLevel::Warning,
@@ -184,16 +185,19 @@ fn generate_sarif(file_results: &[FileResult]) -> sarif::Sarif {
 
     for file_result in file_results {
         for issue in &file_result.issues {
-            let region = if let Some(col) = issue.column {
-                sarif::Region::builder()
-                    .start_line(issue.line as i64)
-                    .start_column(col as i64)
-                    .build()
-            } else {
-                sarif::Region::builder()
-                    .start_line(issue.line as i64)
-                    .build()
-            };
+            #[allow(clippy::cast_possible_wrap)] // Line/column numbers won't exceed i64::MAX
+            let line = issue.line as i64;
+            let region = issue.column.map_or_else(
+                || sarif::Region::builder().start_line(line).build(),
+                |col| {
+                    #[allow(clippy::cast_possible_wrap)]
+                    let col = col as i64;
+                    sarif::Region::builder()
+                        .start_line(line)
+                        .start_column(col)
+                        .build()
+                },
+            );
 
             let artifact_location = sarif::ArtifactLocation::builder()
                 .uri(file_result.path.clone())
