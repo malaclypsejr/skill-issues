@@ -180,6 +180,10 @@ Compatible with:
     skill-issues --strict skills/
 ```
 
+## Acknowledgments
+
+Unicode tag detection, variation selector coverage, suspicion level scoring, and confusable space detection were inspired by [aid](https://github.com/wunderwuzzi23/aid) by [@wunderwuzzi23](https://github.com/wunderwuzzi23).
+
 ## License
 
 AGPLv3

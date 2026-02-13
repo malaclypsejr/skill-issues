@@ -39,6 +39,14 @@ struct Cli {
     /// Show detailed output for all files
     #[arg(short, long)]
     verbose: bool,
+
+    /// Also scan for classic control chars (Cc), excluding TAB/LF/CR
+    #[arg(long)]
+    include_cc: bool,
+
+    /// Also scan for confusable/suspicious spaces and fillers (e.g. NBSP, thin space, hangul filler)
+    #[arg(long)]
+    include_confusable_spaces: bool,
 }
 
 #[derive(ValueEnum, Clone, Debug, Serialize, Deserialize)]
@@ -53,6 +61,12 @@ enum OutputFormat {
 struct FileResult {
     path: String,
     issues: Vec<Issue>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    suspicion_level: Option<SuspicionLevel>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    total_invisible_codepoints: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    longest_consecutive_run: Option<usize>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -71,22 +85,38 @@ struct Summary {
     total_warnings: usize,
 }
 
+struct LinterConfig {
+    max_empty_lines: usize,
+    include_cc: bool,
+    include_confusable_spaces: bool,
+}
+
 struct Linter {
     rules: Vec<Box<dyn Rule>>,
 }
 
 impl Linter {
-    fn new(max_empty_lines: usize) -> Self {
+    fn new(config: LinterConfig) -> Self {
+        let mut invisible_rule = invisible_chars::InvisibleCharactersRule::new();
+        if config.include_confusable_spaces {
+            invisible_rule = invisible_rule.with_confusable_spaces();
+        }
+
+        let mut non_printable_rule = non_printable::NonPrintableCharRule::new();
+        non_printable_rule.include_cc = config.include_cc;
+
         let rules: Vec<Box<dyn Rule>> = vec![
             Box::new(html_comments::HtmlCommentRule),
-            Box::new(non_printable::NonPrintableCharRule),
-            Box::new(excessive_whitespace::ExcessiveWhitespaceRule { max_empty_lines }),
+            Box::new(non_printable_rule),
+            Box::new(excessive_whitespace::ExcessiveWhitespaceRule {
+                max_empty_lines: config.max_empty_lines,
+            }),
             Box::new(suspicious_keywords::SuspiciousKeywordsRule),
             Box::new(unicode_homoglyphs::UnicodeHomoglyphRule),
             Box::new(mixed_scripts::MixedScriptRule),
             Box::new(url_encoding::UrlEncodingRule),
             Box::new(excessive_backticks::ExcessiveBackticksRule),
-            Box::new(invisible_chars::InvisibleCharactersRule),
+            Box::new(invisible_rule),
             Box::new(base64_encoded::Base64EncodedRule),
             Box::new(high_entropy::HighEntropyRule),
         ];
@@ -211,7 +241,22 @@ fn output_text(file_results: &[FileResult], summary: &Summary, quiet: bool, verb
     if !files_with_issues.is_empty() {
         println!(); // Blank line before first file
         for file_result in &files_with_issues {
-            println!("{}", file_result.path.bold().underline());
+            let suspicion_badge = match &file_result.suspicion_level {
+                Some(SuspicionLevel::Critical) => format!(" {}", "[CRITICAL]".red().bold()),
+                Some(SuspicionLevel::High) => format!(" {}", "[HIGH]".red()),
+                Some(SuspicionLevel::Medium) => format!(" {}", "[MEDIUM]".yellow()),
+                Some(SuspicionLevel::Info) | None => String::new(),
+            };
+
+            println!("{}{}", file_result.path.bold().underline(), suspicion_badge);
+
+            // Show invisible char summary if present
+            if let (Some(total), Some(run)) = (
+                file_result.total_invisible_codepoints,
+                file_result.longest_consecutive_run,
+            ) {
+                println!("  {total} invisible codepoints, longest consecutive run: {run}");
+            }
 
             for issue in &file_result.issues {
                 let severity_str = match issue.severity {
@@ -240,6 +285,27 @@ fn output_text(file_results: &[FileResult], summary: &Summary, quiet: bool, verb
     }
 
     if !files_with_issues.is_empty() {
+        // Suspicion level breakdown
+        let critical_count = file_results
+            .iter()
+            .filter(|f| f.suspicion_level == Some(SuspicionLevel::Critical))
+            .count();
+        let high_count = file_results
+            .iter()
+            .filter(|f| f.suspicion_level == Some(SuspicionLevel::High))
+            .count();
+
+        if critical_count > 0 {
+            println!(
+                "{} {}",
+                critical_count,
+                "files with CRITICAL suspicion level".red().bold()
+            );
+        }
+        if high_count > 0 {
+            println!("{} {}", high_count, "files with HIGH suspicion level".red());
+        }
+
         println!(
             "{} {} found",
             summary.total_errors,
@@ -255,7 +321,11 @@ fn output_text(file_results: &[FileResult], summary: &Summary, quiet: bool, verb
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
-    let linter = Linter::new(cli.max_empty_lines);
+    let linter = Linter::new(LinterConfig {
+        max_empty_lines: cli.max_empty_lines,
+        include_cc: cli.include_cc,
+        include_confusable_spaces: cli.include_confusable_spaces,
+    });
 
     let mut total_errors = 0;
     let mut total_warnings = 0;
@@ -285,9 +355,20 @@ fn main() -> Result<()> {
             }
         }
 
+        // Compute suspicion level for invisible character density
+        let (suspicion, total_invisible, longest_run) = compute_suspicion_level(&content);
+        let (susp_level, susp_total, susp_run) = if total_invisible > 0 {
+            (Some(suspicion), Some(total_invisible), Some(longest_run))
+        } else {
+            (None, None, None)
+        };
+
         file_results.push(FileResult {
             path: path.display().to_string(),
             issues,
+            suspicion_level: susp_level,
+            total_invisible_codepoints: susp_total,
+            longest_consecutive_run: susp_run,
         });
     }
 
@@ -330,7 +411,11 @@ mod integration_tests {
 
     #[test]
     fn linter_detects_all_issue_types() {
-        let linter = Linter::new(3);
+        let linter = Linter::new(LinterConfig {
+            max_empty_lines: 3,
+            include_cc: false,
+            include_confusable_spaces: false,
+        });
         let content = r#"# Test Document
 
 <!-- Hidden comment -->
@@ -373,7 +458,11 @@ High entropy: dQw4w9WgXcQvXhGGXTthx6z8JG4Z3L6vX9T3z7K9P8N
 
     #[test]
     fn linter_returns_empty_on_clean_document() {
-        let linter = Linter::new(3);
+        let linter = Linter::new(LinterConfig {
+            max_empty_lines: 3,
+            include_cc: false,
+            include_confusable_spaces: false,
+        });
         let content = r#"# Clean Document
 
 This is a completely clean markdown file.
@@ -397,7 +486,11 @@ No hidden characters or suspicious content.
 
     #[test]
     fn issues_sorted_by_line_number() {
-        let linter = Linter::new(3);
+        let linter = Linter::new(LinterConfig {
+            max_empty_lines: 3,
+            include_cc: false,
+            include_confusable_spaces: false,
+        });
         let content = r#"Line 1
 <!-- comment on line 2 -->
 Line 3
