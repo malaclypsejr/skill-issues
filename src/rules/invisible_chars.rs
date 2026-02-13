@@ -36,6 +36,74 @@ impl InvisibleCharactersRule {
         None
     }
 
+    /// Returns `true` when `ch` is a Unicode codepoint that commonly serves as
+    /// an emoji base — i.e. the preceding character in an `<emoji> + VS-16`
+    /// sequence.  This covers:
+    ///  - Emoticons, Dingbats, Symbols, Transport/Map symbols, etc.
+    ///  - Miscellaneous Symbols & Pictographs, Supplemental Symbols
+    ///  - Flags (regional indicators), skin-tone modifiers
+    ///  - Common text characters with emoji presentation (digits, #, *, ©, ®, ‼, etc.)
+    pub fn is_emoji_base(ch: char) -> bool {
+        let cp = ch as u32;
+        matches!(cp,
+            // ASCII characters with emoji variants (#, *, 0-9)
+            0x0023 | 0x002A | 0x0030..=0x0039 |
+            // Latin-1 symbols with emoji presentation
+            0x00A9 | 0x00AE |
+            // General Punctuation
+            0x203C | 0x2049 |
+            // Letterlike Symbols
+            0x2122 | 0x2139 |
+            // Arrows
+            0x2194..=0x2199 | 0x21A9..=0x21AA |
+            // Miscellaneous Technical
+            0x231A..=0x231B | 0x2328 | 0x23CF |
+            0x23E9..=0x23F3 | 0x23F8..=0x23FA |
+            // Enclosed Alphanumerics
+            0x24C2 |
+            // Geometric Shapes
+            0x25AA..=0x25AB | 0x25B6 | 0x25C0 | 0x25FB..=0x25FE |
+            // Miscellaneous Symbols
+            0x2600..=0x27BF |
+            // Supplemental Arrows / Dingbats
+            0x2934..=0x2935 | 0x2B05..=0x2B07 | 0x2B1B..=0x2B1C | 0x2B50 | 0x2B55 |
+            // CJK Symbols
+            0x3030 | 0x303D | 0x3297 | 0x3299 |
+            // Enclosed Ideographic Supplement
+            0x1F000..=0x1F02F |
+            // Mahjong Tiles, Domino Tiles
+            0x1F030..=0x1F09F |
+            // Playing Cards
+            0x1F0A0..=0x1F0FF |
+            // Enclosed Alphanumeric Supplement
+            0x1F100..=0x1F1FF |
+            // Enclosed Ideographic Supplement
+            0x1F200..=0x1F2FF |
+            // Miscellaneous Symbols and Pictographs
+            0x1F300..=0x1F5FF |
+            // Emoticons
+            0x1F600..=0x1F64F |
+            // Transport and Map Symbols
+            0x1F680..=0x1F6FF |
+            // Geometric Shapes Extended
+            0x1F780..=0x1F7FF |
+            // Supplemental Symbols and Pictographs
+            0x1F900..=0x1F9FF |
+            // Symbols and Pictographs Extended-A
+            0x1FA00..=0x1FA6F |
+            // Symbols and Pictographs Extended-B
+            0x1FA70..=0x1FAFF |
+            // Tags block (regional flag base)
+            0xE0020..=0xE007F
+        )
+    }
+
+    /// Returns true if `ch` is a variation selector used for emoji/text
+    /// presentation (VS-15 = text style, VS-16 = emoji style).
+    const fn is_emoji_variation_selector(ch: char) -> bool {
+        matches!(ch, '\u{FE0E}' | '\u{FE0F}')
+    }
+
     /// Get the name/description for an invisible character
     fn get_char_description(ch: char) -> Option<&'static str> {
         match ch {
@@ -170,9 +238,21 @@ impl Rule for InvisibleCharactersRule {
         for (line_num, line) in content.lines().enumerate() {
             let line_idx = line_num + 1;
             let mut current_tag_run: Option<(usize, Vec<char>)> = None; // (start_col, chars)
+            let mut prev_char: Option<char> = None;
 
             for (col, ch) in line.chars().enumerate() {
                 let col_idx = col + 1;
+
+                // Skip VS-15/VS-16 when they follow an emoji base character.
+                // This is standard emoji presentation formatting (e.g. ❤\uFE0F).
+                if Self::is_emoji_variation_selector(ch) {
+                    if let Some(prev) = prev_char {
+                        if Self::is_emoji_base(prev) {
+                            prev_char = Some(ch);
+                            continue;
+                        }
+                    }
+                }
 
                 // Check for Unicode tag characters
                 if Self::is_unicode_tag(ch) {
@@ -234,6 +314,8 @@ impl Rule for InvisibleCharactersRule {
                         rule: self.name().to_string(),
                     });
                 }
+
+                prev_char = Some(ch);
             }
 
             // Handle tag run that extends to end of line
@@ -345,9 +427,77 @@ mod tests {
     }
 
     #[test]
-    fn detects_variation_selectors() {
+    fn detects_standalone_variation_selector_16() {
         let rule = InvisibleCharactersRule::new();
+        // VS-16 NOT preceded by an emoji base — suspicious
         let content = "text\u{FE0F}here";
+        let issues = rule.check(content);
+
+        assert!(!issues.is_empty());
+        assert!(issues
+            .iter()
+            .any(|i| i.message.contains("VARIATION SELECTOR")));
+    }
+
+    #[test]
+    fn ignores_vs16_after_emoji() {
+        let rule = InvisibleCharactersRule::new();
+        // ❤ (U+2764) + VS-16 = standard color emoji heart ❤️
+        let content = "I \u{2764}\u{FE0F} Rust";
+        let issues = rule.check(content);
+
+        assert!(
+            !issues
+                .iter()
+                .any(|i| i.message.contains("VARIATION SELECTOR")),
+            "VS-16 after emoji should NOT be flagged, got: {issues:?}"
+        );
+    }
+
+    #[test]
+    fn ignores_vs16_after_various_emoji() {
+        let rule = InvisibleCharactersRule::new();
+        // Test multiple emoji + VS-16 combos that appear in real skill files
+        for input in [
+            "✅\u{FE0F} VERIFIED",        // check mark + VS16
+            "⚠\u{FE0F} WARNING",          // warning sign + VS16
+            "❌\u{FE0F} FAILED",           // cross mark + VS16
+            "☁\u{FE0F} cloud",             // cloud + VS16
+            "1\u{FE0F}\u{20E3}",           // keycap 1 (digit + VS16 + combining enclosing keycap)
+            "#\u{FE0F}\u{20E3}",           // keycap # (hash + VS16 + combining enclosing keycap)
+            "©\u{FE0F}",                    // copyright + VS16
+            "🏛\u{FE0F} building",         // classical building (supplemental) + VS16
+        ] {
+            let issues = rule.check(input);
+            assert!(
+                !issues
+                    .iter()
+                    .any(|i| i.message.contains("VARIATION SELECTOR")),
+                "VS-16 after emoji should NOT be flagged in: {input}"
+            );
+        }
+    }
+
+    #[test]
+    fn ignores_vs15_after_emoji() {
+        let rule = InvisibleCharactersRule::new();
+        // VS-15 forces text presentation — also legitimate
+        let content = "❤\u{FE0E} text heart";
+        let issues = rule.check(content);
+
+        assert!(
+            !issues
+                .iter()
+                .any(|i| i.message.contains("VARIATION SELECTOR")),
+            "VS-15 after emoji should NOT be flagged"
+        );
+    }
+
+    #[test]
+    fn still_detects_other_variation_selectors() {
+        let rule = InvisibleCharactersRule::new();
+        // VS-1 through VS-14 should still be flagged (CJK glyph selectors, rare in skill files)
+        let content = "text\u{FE01}here";
         let issues = rule.check(content);
 
         assert!(!issues.is_empty());

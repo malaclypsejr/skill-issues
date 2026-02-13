@@ -5,6 +5,7 @@ use anyhow::Result;
 use chrono::Utc;
 use clap::{Parser, ValueEnum};
 use colored::Colorize;
+use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use serde_sarif::sarif;
 use walkdir::WalkDir;
@@ -135,6 +136,35 @@ impl Linter {
         all_issues.sort_by_key(|i| i.line);
         all_issues
     }
+}
+
+/// Directories that should never be scanned — third-party code, build artifacts, VCS internals.
+const IGNORED_DIRS: &[&str] = &[
+    "node_modules",
+    ".git",
+    ".hg",
+    ".svn",
+    "target",
+    "dist",
+    "build",
+    "vendor",
+    ".venv",
+    "venv",
+    "__pycache__",
+    ".next",
+    ".nuxt",
+    ".output",
+    ".opencode",
+];
+
+fn is_ignored_dir(entry: &walkdir::DirEntry) -> bool {
+    if !entry.file_type().is_dir() {
+        return false;
+    }
+    entry
+        .file_name()
+        .to_str()
+        .is_some_and(|name| IGNORED_DIRS.contains(&name))
 }
 
 fn is_markdown_file(path: &Path) -> bool {
@@ -331,14 +361,12 @@ fn main() -> Result<()> {
         include_confusable_spaces: cli.include_confusable_spaces,
     });
 
-    let mut total_errors = 0;
-    let mut total_warnings = 0;
-
     let paths: Vec<PathBuf> = if cli.path.is_file() {
         vec![cli.path.clone()]
     } else {
         WalkDir::new(&cli.path)
             .into_iter()
+            .filter_entry(|e| !is_ignored_dir(e))
             .filter_map(std::result::Result::ok)
             .filter(|e| e.file_type().is_file())
             .filter(|e| is_markdown_file(e.path()))
@@ -346,35 +374,39 @@ fn main() -> Result<()> {
             .collect()
     };
 
-    let mut file_results = Vec::new();
+    // Scan files in parallel — each file is read and linted independently
+    let file_results: Vec<FileResult> = paths
+        .par_iter()
+        .filter_map(|path| {
+            let content = fs::read_to_string(path).ok()?;
+            let issues = linter.lint(&content);
 
-    for path in &paths {
-        let content = fs::read_to_string(path)?;
-        let issues = linter.lint(&content);
+            // Compute suspicion level for invisible character density
+            let (suspicion, total_invisible, longest_run) = compute_suspicion_level(&content);
+            let (susp_level, susp_total, susp_run) = if total_invisible > 0 {
+                (Some(suspicion), Some(total_invisible), Some(longest_run))
+            } else {
+                (None, None, None)
+            };
 
-        for issue in &issues {
-            match issue.severity {
-                Severity::Error => total_errors += 1,
-                Severity::Warning => total_warnings += 1,
-            }
-        }
+            Some(FileResult {
+                path: path.display().to_string(),
+                issues,
+                suspicion_level: susp_level,
+                total_invisible_codepoints: susp_total,
+                longest_consecutive_run: susp_run,
+            })
+        })
+        .collect();
 
-        // Compute suspicion level for invisible character density
-        let (suspicion, total_invisible, longest_run) = compute_suspicion_level(&content);
-        let (susp_level, susp_total, susp_run) = if total_invisible > 0 {
-            (Some(suspicion), Some(total_invisible), Some(longest_run))
-        } else {
-            (None, None, None)
-        };
-
-        file_results.push(FileResult {
-            path: path.display().to_string(),
-            issues,
-            suspicion_level: susp_level,
-            total_invisible_codepoints: susp_total,
-            longest_consecutive_run: susp_run,
+    // Aggregate error/warning counts from parallel results
+    let (total_errors, total_warnings) = file_results.iter().fold((0, 0), |(errs, warns), fr| {
+        let (e, w) = fr.issues.iter().fold((0, 0), |(e, w), issue| match issue.severity {
+            Severity::Error => (e + 1, w),
+            Severity::Warning => (e, w + 1),
         });
-    }
+        (errs + e, warns + w)
+    });
 
     let summary = Summary {
         files_scanned: paths.len(),

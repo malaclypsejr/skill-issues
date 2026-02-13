@@ -28,7 +28,7 @@ pub struct Issue {
     pub rule: String,
 }
 
-pub trait Rule {
+pub trait Rule: Send + Sync {
     fn name(&self) -> &'static str;
     fn check(&self, content: &str) -> Vec<Issue>;
 }
@@ -67,8 +67,19 @@ pub fn compute_suspicion_level(content: &str) -> (SuspicionLevel, usize, usize) 
     let mut total_invisible: usize = 0;
     let mut longest_consecutive_run: usize = 0;
     let mut current_run: usize = 0;
+    let mut prev_char: Option<char> = None;
 
     for ch in content.chars() {
+        // Skip VS-15/VS-16 after emoji base (standard emoji presentation)
+        if is_emoji_variation_selector(ch) {
+            if let Some(prev) = prev_char {
+                if invisible_chars::InvisibleCharactersRule::is_emoji_base(prev) {
+                    prev_char = Some(ch);
+                    continue;
+                }
+            }
+        }
+
         if is_invisible_codepoint(ch) {
             total_invisible += 1;
             current_run += 1;
@@ -78,6 +89,7 @@ pub fn compute_suspicion_level(content: &str) -> (SuspicionLevel, usize, usize) 
         } else {
             current_run = 0;
         }
+        prev_char = Some(ch);
     }
 
     let level = if longest_consecutive_run >= 40 {
@@ -91,6 +103,11 @@ pub fn compute_suspicion_level(content: &str) -> (SuspicionLevel, usize, usize) 
     };
 
     (level, total_invisible, longest_consecutive_run)
+}
+
+/// Returns true if `ch` is VS-15 or VS-16 (emoji text/presentation selectors).
+const fn is_emoji_variation_selector(ch: char) -> bool {
+    matches!(ch, '\u{FE0E}' | '\u{FE0F}')
 }
 
 /// Returns true if the character is one of the invisible/smuggling codepoints
