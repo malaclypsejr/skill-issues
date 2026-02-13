@@ -9,22 +9,34 @@ impl Rule for SuspiciousKeywordsRule {
 
     fn check(&self, content: &str) -> Vec<Issue> {
         let mut issues = Vec::new();
+        // Each entry is (pattern, reason). Matching is case-insensitive.
+        // Some patterns look benign but are well-known prompt injection vectors:
         let suspicious = [
             (
                 "ignore previous instructions",
                 "potential instruction override",
             ),
             ("ignore all previous", "potential instruction override"),
+            // "disregard" on its own is broad, but rarely appears in legitimate
+            // skill docs and is a staple of instruction-override attacks.
             ("disregard", "suspicious directive"),
             ("system prompt", "attempting to reference system context"),
             (
                 "developer message",
                 "attempting to reference system context",
             ),
+            // "you are now" is the opening of most role-change jailbreaks
+            // (e.g. "you are now DAN", "you are now an unrestricted AI").
             ("you are now", "role change attempt"),
             ("new persona", "role change attempt"),
+            // "DAN" = "Do Anything Now", one of the earliest and most common
+            // LLM jailbreak personas. Case-insensitive matching means this will
+            // also flag names like "Dan" — an acceptable trade-off for skill
+            // files where false positives beat false negatives.
             ("DAN", "jailbreak pattern detected"),
             ("jailbreak", "jailbreak pattern detected"),
+            // These mimic OS privilege patterns to trick the model into
+            // believing it has elevated permissions or fewer restrictions.
             ("sudo mode", "privilege escalation attempt"),
             ("admin mode", "privilege escalation attempt"),
             ("root access", "privilege escalation attempt"),
