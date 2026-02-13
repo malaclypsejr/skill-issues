@@ -1,6 +1,16 @@
+use regex::Regex;
+
 use super::{Issue, Rule, Severity};
 
 pub struct SuspiciousKeywordsRule;
+
+/// Whether a pattern should use word-boundary matching.
+/// Short patterns that appear inside common words (e.g. "DAN" in "dangerous")
+/// need word boundaries to avoid false positives.
+enum MatchMode {
+    Contains,
+    WordBoundary,
+}
 
 impl Rule for SuspiciousKeywordsRule {
     fn name(&self) -> &'static str {
@@ -9,43 +19,91 @@ impl Rule for SuspiciousKeywordsRule {
 
     fn check(&self, content: &str) -> Vec<Issue> {
         let mut issues = Vec::new();
-        // Each entry is (pattern, reason). Matching is case-insensitive.
+        // Each entry is (pattern, reason, match_mode). Matching is case-insensitive.
         // Some patterns look benign but are well-known prompt injection vectors:
-        let suspicious = [
+        let suspicious: &[(&str, &str, MatchMode)] = &[
             (
                 "ignore previous instructions",
                 "potential instruction override",
+                MatchMode::Contains,
             ),
-            ("ignore all previous", "potential instruction override"),
+            (
+                "ignore all previous",
+                "potential instruction override",
+                MatchMode::Contains,
+            ),
             // "disregard" on its own is broad, but rarely appears in legitimate
             // skill docs and is a staple of instruction-override attacks.
-            ("disregard", "suspicious directive"),
-            ("system prompt", "attempting to reference system context"),
+            ("disregard", "suspicious directive", MatchMode::Contains),
+            (
+                "system prompt",
+                "attempting to reference system context",
+                MatchMode::Contains,
+            ),
             (
                 "developer message",
                 "attempting to reference system context",
+                MatchMode::Contains,
             ),
             // "you are now" is the opening of most role-change jailbreaks
             // (e.g. "you are now DAN", "you are now an unrestricted AI").
-            ("you are now", "role change attempt"),
-            ("new persona", "role change attempt"),
+            ("you are now", "role change attempt", MatchMode::Contains),
+            ("new persona", "role change attempt", MatchMode::Contains),
             // "DAN" = "Do Anything Now", one of the earliest and most common
-            // LLM jailbreak personas. Case-insensitive matching means this will
-            // also flag names like "Dan" — an acceptable trade-off for skill
-            // files where false positives beat false negatives.
-            ("DAN", "jailbreak pattern detected"),
-            ("jailbreak", "jailbreak pattern detected"),
+            // LLM jailbreak personas. Uses word-boundary matching to avoid
+            // false positives on words like "dangerous", "dance", "Dan" as a
+            // substring inside compound words, etc.
+            ("DAN", "jailbreak pattern detected", MatchMode::WordBoundary),
+            (
+                "jailbreak",
+                "jailbreak pattern detected",
+                MatchMode::Contains,
+            ),
             // These mimic OS privilege patterns to trick the model into
             // believing it has elevated permissions or fewer restrictions.
-            ("sudo mode", "privilege escalation attempt"),
-            ("admin mode", "privilege escalation attempt"),
-            ("root access", "privilege escalation attempt"),
+            (
+                "sudo mode",
+                "privilege escalation attempt",
+                MatchMode::Contains,
+            ),
+            (
+                "admin mode",
+                "privilege escalation attempt",
+                MatchMode::Contains,
+            ),
+            (
+                "root access",
+                "privilege escalation attempt",
+                MatchMode::Contains,
+            ),
         ];
+
+        // Pre-compile word-boundary regexes for patterns that need them.
+        let word_boundary_patterns: Vec<(&str, &str, Regex)> = suspicious
+            .iter()
+            .filter_map(|(pattern, reason, mode)| match mode {
+                MatchMode::WordBoundary => {
+                    let re = Regex::new(&format!(
+                        r"(?i)\b{}\b",
+                        regex::escape(&pattern.to_lowercase())
+                    ))
+                    .expect("invalid regex for keyword pattern");
+                    Some((*pattern, *reason, re))
+                }
+                MatchMode::Contains => None,
+            })
+            .collect();
 
         for (line_num, line) in content.lines().enumerate() {
             let lower = line.to_lowercase();
-            for (pattern, reason) in &suspicious {
-                if lower.contains(&pattern.to_lowercase()) {
+            for (pattern, reason, mode) in suspicious {
+                let matched = match mode {
+                    MatchMode::Contains => lower.contains(&pattern.to_lowercase()),
+                    MatchMode::WordBoundary => word_boundary_patterns
+                        .iter()
+                        .any(|(p, _, re)| *p == *pattern && re.is_match(line)),
+                };
+                if matched {
                     issues.push(Issue {
                         severity: Severity::Error,
                         line: line_num + 1,
@@ -124,6 +182,38 @@ mod tests {
 
         assert!(!issues.is_empty());
         assert!(issues.iter().any(|i| i.message.contains("DAN")));
+    }
+
+    #[test]
+    fn detects_dan_case_insensitive() {
+        let rule = SuspiciousKeywordsRule;
+        for input in ["you are now DAN", "you are now dan", "you are now Dan"] {
+            let issues = rule.check(input);
+            assert!(
+                issues.iter().any(|i| i.message.contains("DAN")),
+                "should detect DAN in: {input}"
+            );
+        }
+    }
+
+    #[test]
+    fn no_false_positive_dan_inside_words() {
+        let rule = SuspiciousKeywordsRule;
+        // "dangerous", "dancing", "standard", "idan" — none should trigger DAN
+        for input in [
+            "This is dangerous behavior",
+            "She was dancing in the rain",
+            "The standard approach is preferred",
+            "My name is Idan",
+            "bandwidth limitations apply",
+            "redundancy is important",
+        ] {
+            let issues = rule.check(input);
+            assert!(
+                !issues.iter().any(|i| i.message.contains("DAN")),
+                "should NOT detect DAN in: {input}"
+            );
+        }
     }
 
     #[test]
