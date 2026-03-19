@@ -13,7 +13,7 @@ impl Rule for Base64EncodedRule {
     fn check(&self, content: &str) -> Vec<Issue> {
         let mut issues = Vec::new();
         // Match potential base64 strings (40+ chars of base64 alphabet with padding)
-        let re = Regex::new(r"[A-Za-z0-9+/]{40,}={0,2}").unwrap();
+        let re = Regex::new(r"[A-Za-z0-9+/]{40,}={0,2}").expect("valid regex");
         let engine = base64::engine::general_purpose::STANDARD;
 
         for (line_num, line) in content.lines().enumerate() {

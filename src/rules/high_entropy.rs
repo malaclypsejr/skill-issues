@@ -5,7 +5,10 @@ use regex::Regex;
 use super::{Issue, Rule, Severity};
 
 /// Calculate Shannon entropy of a string in bits per character
-#[allow(clippy::cast_precision_loss)] // Precision loss at 2^52 is irrelevant for entropy math
+#[expect(
+    clippy::cast_precision_loss,
+    reason = "Precision loss at 2^52 is irrelevant for entropy math"
+)]
 fn calculate_entropy(s: &str) -> f64 {
     if s.is_empty() {
         return 0.0;
@@ -29,7 +32,10 @@ fn calculate_entropy(s: &str) -> f64 {
 
 /// Calculate chi-square statistic for character distribution
 /// Compares observed distribution against expected uniform distribution
-#[allow(clippy::cast_precision_loss)] // Precision loss at 2^52 is irrelevant for chi-square math
+#[expect(
+    clippy::cast_precision_loss,
+    reason = "Precision loss at 2^52 is irrelevant for chi-square math"
+)]
 fn calculate_chi_square(s: &str) -> f64 {
     if s.is_empty() {
         return 0.0;
@@ -63,24 +69,33 @@ fn calculate_chi_square(s: &str) -> f64 {
 fn is_likely_legitimate(s: &str) -> bool {
     // UUID pattern
     if Regex::new(r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
-        .unwrap()
+        .expect("valid regex")
         .is_match(s)
     {
         return true;
     }
 
     // SHA-256 or similar hashes (64 hex chars)
-    if Regex::new(r"^[0-9a-fA-F]{64}$").unwrap().is_match(s) {
+    if Regex::new(r"^[0-9a-fA-F]{64}$")
+        .expect("valid regex")
+        .is_match(s)
+    {
         return true;
     }
 
     // SHA-1 (40 hex chars)
-    if Regex::new(r"^[0-9a-fA-F]{40}$").unwrap().is_match(s) {
+    if Regex::new(r"^[0-9a-fA-F]{40}$")
+        .expect("valid regex")
+        .is_match(s)
+    {
         return true;
     }
 
     // MD5 (32 hex chars)
-    if Regex::new(r"^[0-9a-fA-F]{32}$").unwrap().is_match(s) {
+    if Regex::new(r"^[0-9a-fA-F]{32}$")
+        .expect("valid regex")
+        .is_match(s)
+    {
         return true;
     }
 
@@ -90,7 +105,9 @@ fn is_likely_legitimate(s: &str) -> bool {
     }
 
     // Git commit hashes (7-40 hex chars often abbreviated)
-    if Regex::new(r"^[0-9a-f]{7,40}$").unwrap().is_match(s)
+    if Regex::new(r"^[0-9a-f]{7,40}$")
+        .expect("valid regex")
+        .is_match(s)
         && s.chars()
             .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit())
     {
@@ -111,7 +128,7 @@ impl Rule for HighEntropyRule {
         let mut issues = Vec::new();
 
         // Look for long alphanumeric strings that might be encoded
-        let re = Regex::new(r"[A-Za-z0-9+/=]{20,}").unwrap();
+        let re = Regex::new(r"[A-Za-z0-9+/=]{20,}").expect("valid regex");
 
         for (line_num, line) in content.lines().enumerate() {
             for mat in re.find_iter(line) {

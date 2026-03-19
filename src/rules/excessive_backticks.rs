@@ -11,7 +11,7 @@ impl Rule for ExcessiveBackticksRule {
 
     fn check(&self, content: &str) -> Vec<Issue> {
         let mut issues = Vec::new();
-        let re = Regex::new(r"`{10,}").unwrap();
+        let re = Regex::new(r"`{10,}").expect("valid regex");
 
         for (line_num, line) in content.lines().enumerate() {
             if let Some(mat) = re.find(line) {

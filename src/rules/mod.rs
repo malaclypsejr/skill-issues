@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 pub mod base64_encoded;
 pub mod excessive_backticks;
 pub mod excessive_whitespace;
+pub mod frontmatter_hooks;
 pub mod high_entropy;
 pub mod html_comments;
 pub mod invisible_chars;

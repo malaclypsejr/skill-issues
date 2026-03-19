@@ -11,12 +11,12 @@ use serde_sarif::sarif;
 use walkdir::WalkDir;
 
 mod rules;
-use rules::{Issue, SuspicionLevel, Rule, invisible_chars, non_printable, html_comments, excessive_whitespace, suspicious_keywords, unicode_homoglyphs, mixed_scripts, url_encoding, excessive_backticks, base64_encoded, high_entropy, Severity, compute_suspicion_level};
+use rules::{Issue, SuspicionLevel, Rule, invisible_chars, non_printable, html_comments, excessive_whitespace, suspicious_keywords, unicode_homoglyphs, mixed_scripts, url_encoding, excessive_backticks, base64_encoded, high_entropy, frontmatter_hooks, Severity, compute_suspicion_level};
 
 #[derive(Parser)]
 #[command(name = "skill-issues")]
 #[command(about = "Linter for skill markdown files - prevents prompt injection")]
-#[allow(clippy::struct_excessive_bools)] // CLI flags are naturally boolean
+#[expect(clippy::struct_excessive_bools, reason = "CLI flags are naturally boolean")]
 struct Cli {
     /// Path to scan (file or directory)
     #[arg(default_value = ".")]
@@ -122,6 +122,7 @@ impl Linter {
             Box::new(invisible_rule),
             Box::new(base64_encoded::Base64EncodedRule),
             Box::new(high_entropy::HighEntropyRule),
+            Box::new(frontmatter_hooks::FrontmatterHooksRule),
         ];
 
         Self { rules }
@@ -193,6 +194,7 @@ fn generate_sarif(file_results: &[FileResult]) -> sarif::Sarif {
         "excessive-backticks",
         "invisible-characters",
         "high-entropy",
+        "frontmatter-hooks",
     ]
     .iter()
     .map(|id| {
@@ -215,12 +217,12 @@ fn generate_sarif(file_results: &[FileResult]) -> sarif::Sarif {
 
     for file_result in file_results {
         for issue in &file_result.issues {
-            #[allow(clippy::cast_possible_wrap)] // Line/column numbers won't exceed i64::MAX
+            #[expect(clippy::cast_possible_wrap, reason = "Line numbers won't exceed i64::MAX")]
             let line = issue.line as i64;
             let region = issue.column.map_or_else(
                 || sarif::Region::builder().start_line(line).build(),
                 |col| {
-                    #[allow(clippy::cast_possible_wrap)]
+                    #[expect(clippy::cast_possible_wrap, reason = "Column numbers won't exceed i64::MAX")]
                     let col = col as i64;
                     sarif::Region::builder()
                         .start_line(line)

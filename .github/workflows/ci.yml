@@ -38,3 +38,26 @@ jobs:
 
       - name: Run clippy
         run: cargo clippy -- -D warnings
+
+  docker:
+    runs-on: ubuntu-latest
+    name: Build & smoke-test Docker image
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build image
+        run: docker build -t skill-issues:ci .
+
+      - name: Verify binary runs
+        run: docker run --rm skill-issues:ci --help
+
+      - name: Check image size
+        run: |
+          SIZE=$(docker image inspect skill-issues:ci --format '{{.Size}}')
+          echo "Image size: $((SIZE / 1024 / 1024)) MB"
+          # Fail if image exceeds 10MB — scratch should be well under
+          if [ "$SIZE" -gt 10485760 ]; then
+            echo "::error::Image too large: $((SIZE / 1024 / 1024)) MB (limit: 10 MB)"
+            exit 1
+          fi

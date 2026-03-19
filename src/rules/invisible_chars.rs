@@ -27,7 +27,7 @@ impl InvisibleCharactersRule {
         let cp = ch as u32;
         if (0xE0000..=0xE007F).contains(&cp) {
             // U+E0000 + ascii_code
-            #[allow(clippy::cast_possible_truncation)]
+            #[expect(clippy::cast_possible_truncation, reason = "Tag codepoints are in range 0xE0000-0xE007F, difference always fits in u8")]
             let ascii_code = (cp - 0xE0000) as u8;
             if ascii_code <= 0x7F {
                 return Some(ascii_code as char);

@@ -11,7 +11,7 @@ impl Rule for UrlEncodingRule {
 
     fn check(&self, content: &str) -> Vec<Issue> {
         let mut issues = Vec::new();
-        let re = Regex::new(r"%[0-9A-Fa-f]{2}").unwrap();
+        let re = Regex::new(r"%[0-9A-Fa-f]{2}").expect("valid regex");
 
         for (line_num, line) in content.lines().enumerate() {
             let matches: Vec<_> = re.find_iter(line).collect();
