@@ -6,6 +6,7 @@ pub mod excessive_whitespace;
 pub mod frontmatter_hooks;
 pub mod high_entropy;
 pub mod html_comments;
+pub mod inline_commands;
 pub mod invisible_chars;
 pub mod mixed_scripts;
 pub mod non_printable;
