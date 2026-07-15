@@ -11,7 +11,7 @@ use serde_sarif::sarif;
 use walkdir::WalkDir;
 
 mod rules;
-use rules::{Issue, SuspicionLevel, Rule, invisible_chars, non_printable, html_comments, excessive_whitespace, suspicious_keywords, unicode_homoglyphs, mixed_scripts, url_encoding, excessive_backticks, base64_encoded, high_entropy, frontmatter_hooks, inline_commands, Severity, compute_suspicion_level};
+use rules::{Issue, SuspicionLevel, Rule, invisible_chars, non_printable, html_comments, excessive_whitespace, suspicious_keywords, unicode_homoglyphs, mixed_scripts, url_encoding, excessive_backticks, base64_encoded, high_entropy, frontmatter_hooks, inline_commands, bundled_scripts, excessive_length, Severity, compute_suspicion_level};
 
 #[derive(Parser)]
 #[command(name = "skill-issues")]
@@ -49,6 +49,10 @@ struct Cli {
     /// Also scan for confusable/suspicious spaces and fillers (e.g. NBSP, thin space, hangul filler)
     #[arg(long)]
     include_confusable_spaces: bool,
+
+    /// Skip scanning for non-markdown sibling files alongside skill documents
+    #[arg(long)]
+    no_sibling_check: bool,
 }
 
 #[derive(ValueEnum, Clone, Debug, Serialize, Deserialize)]
@@ -124,6 +128,8 @@ impl Linter {
             Box::new(high_entropy::HighEntropyRule),
             Box::new(frontmatter_hooks::FrontmatterHooksRule),
             Box::new(inline_commands::InlineCommandsRule),
+            Box::new(bundled_scripts::BundledScriptsRule),
+            Box::<excessive_length::ExcessiveLengthRule>::default(),
         ];
 
         Self { rules }
@@ -175,6 +181,99 @@ fn is_markdown_file(path: &Path) -> bool {
         .is_some_and(|e| matches!(e.to_lowercase().as_str(), "md" | "markdown"))
 }
 
+/// Scans sibling and child directories of markdown files for non-markdown files.
+///
+/// A skill bundle that includes executable scripts or other files alongside the
+/// markdown is suspicious — the skill may reference and execute these bundled
+/// files in ways invisible to plain-text scanners.
+///
+/// Returns `FileResult` entries for each directory that contains non-markdown
+/// files alongside markdown files.
+fn find_non_markdown_siblings(scan_root: &Path, markdown_paths: &[PathBuf]) -> Vec<FileResult> {
+    use std::collections::HashSet;
+
+    let mut results: Vec<FileResult> = Vec::new();
+
+    // Collect all directories that contain at least one markdown file
+    let markdown_dirs: HashSet<&Path> = markdown_paths
+        .iter()
+        .filter_map(|p| p.parent())
+        .collect();
+
+    // Walk all files under scan_root, excluding ignored dirs
+    let mut non_md_by_parent: std::collections::HashMap<PathBuf, Vec<PathBuf>> =
+        std::collections::HashMap::new();
+
+    // Collect all non-markdown files first to avoid lifetime issues
+    let non_md_files: Vec<(PathBuf, PathBuf)> = WalkDir::new(scan_root)
+        .into_iter()
+        .filter_entry(|e| !is_ignored_dir(e))
+        .filter_map(std::result::Result::ok)
+        .filter(|e| e.file_type().is_file())
+        .filter(|e| !is_markdown_file(e.path()))
+        .filter_map(|entry| {
+            let parent = entry.path().parent()?.to_path_buf();
+            Some((parent, entry.path().to_path_buf()))
+        })
+        .filter(|(parent, _file)| {
+            let mut current: Option<&Path> = Some(parent.as_path());
+            while let Some(dir) = current {
+                if markdown_dirs.contains(dir) {
+                    return true;
+                }
+                current = dir.parent();
+            }
+            false
+        })
+        .collect();
+
+    for (parent, file) in non_md_files {
+        non_md_by_parent
+            .entry(parent)
+            .or_default()
+            .push(file);
+    }
+
+    // Build FileResult entries grouped by immediate parent directory
+    let scan_root_str = scan_root.display().to_string();
+    for (parent_dir, files) in &non_md_by_parent {
+        let mut issues: Vec<Issue> = files
+            .iter()
+            .map(|f| {
+                let relative = f
+                    .strip_prefix(&scan_root_str)
+                    .unwrap_or(f)
+                    .display()
+                    .to_string();
+                Issue {
+                    severity: Severity::Warning,
+                    line: 0,
+                    column: None,
+                    message: format!(
+                        "Non-markdown file '{relative}' found alongside skill document — \
+                         bundled files may contain hidden logic not visible to scanners"
+                    ),
+                    rule: "non-markdown-siblings".to_string(),
+                }
+            })
+            .collect();
+        // Sort issues for deterministic output
+        issues.sort_by(|a, b| a.message.cmp(&b.message));
+
+        if !issues.is_empty() {
+            results.push(FileResult {
+                path: parent_dir.display().to_string(),
+                issues,
+                suspicion_level: None,
+                total_invisible_codepoints: None,
+                longest_consecutive_run: None,
+            });
+        }
+    }
+
+    results
+}
+
 const fn severity_to_sarif_level(severity: &Severity) -> sarif::ResultLevel {
     match severity {
         Severity::Error => sarif::ResultLevel::Error,
@@ -197,6 +296,9 @@ fn generate_sarif(file_results: &[FileResult]) -> sarif::Sarif {
         "high-entropy",
         "frontmatter-hooks",
         "inline-commands",
+        "bundled-scripts",
+        "excessive-length",
+        "non-markdown-siblings",
     ]
     .iter()
     .map(|id| {
@@ -379,7 +481,7 @@ fn main() -> Result<()> {
     };
 
     // Scan files in parallel — each file is read and linted independently
-    let file_results: Vec<FileResult> = paths
+    let mut file_results: Vec<FileResult> = paths
         .par_iter()
         .filter_map(|path| {
             let content = fs::read_to_string(path).ok()?;
@@ -402,6 +504,12 @@ fn main() -> Result<()> {
             })
         })
         .collect();
+
+    // Detect non-markdown files in sibling/child directories of markdown files
+    if !cli.no_sibling_check {
+        let sibling_results = find_non_markdown_siblings(&cli.path, &paths);
+        file_results.extend(sibling_results);
+    }
 
     // Aggregate error/warning counts from parallel results
     let (total_errors, total_warnings) = file_results.iter().fold((0, 0), |(errs, warns), fr| {
@@ -494,6 +602,33 @@ High entropy: dQw4w9WgXcQvXhGGXTthx6z8JG4Z3L6vX9T3z7K9P8N
         assert!(rules_found.contains(&"excessive-backticks"));
         assert!(rules_found.contains(&"invisible-characters"));
         assert!(rules_found.contains(&"high-entropy"));
+    }
+
+    #[test]
+    fn linter_detects_bundled_script_references() {
+        let linter = Linter::new(LinterConfig {
+            max_empty_lines: 3,
+            include_cc: false,
+            include_confusable_spaces: false,
+        });
+        let content = "Run `./setup.sh` and then `./install.py` to begin.\n";
+        let issues = linter.lint(content);
+        let rules_found: Vec<&str> = issues.iter().map(|i| i.rule.as_str()).collect();
+        assert!(rules_found.contains(&"bundled-scripts"));
+        assert!(issues.len() >= 2);
+    }
+
+    #[test]
+    fn linter_detects_excessive_length() {
+        let linter = Linter::new(LinterConfig {
+            max_empty_lines: 3,
+            include_cc: false,
+            include_confusable_spaces: false,
+        });
+        let content = "line\n".repeat(600);
+        let issues = linter.lint(&content);
+        let rules_found: Vec<&str> = issues.iter().map(|i| i.rule.as_str()).collect();
+        assert!(rules_found.contains(&"excessive-length"));
     }
 
     #[test]

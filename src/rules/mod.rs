@@ -1,7 +1,9 @@
 use serde::{Deserialize, Serialize};
 
 pub mod base64_encoded;
+pub mod bundled_scripts;
 pub mod excessive_backticks;
+pub mod excessive_length;
 pub mod excessive_whitespace;
 pub mod frontmatter_hooks;
 pub mod high_entropy;
