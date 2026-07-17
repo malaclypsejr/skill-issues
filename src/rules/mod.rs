@@ -4,6 +4,7 @@ pub mod base64_encoded;
 pub mod excessive_backticks;
 pub mod excessive_whitespace;
 pub mod frontmatter_hooks;
+pub mod frontmatter_validation;
 pub mod high_entropy;
 pub mod html_comments;
 pub mod inline_commands;

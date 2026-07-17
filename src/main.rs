@@ -11,7 +11,7 @@ use serde_sarif::sarif;
 use walkdir::WalkDir;
 
 mod rules;
-use rules::{Issue, SuspicionLevel, Rule, invisible_chars, non_printable, html_comments, excessive_whitespace, suspicious_keywords, unicode_homoglyphs, mixed_scripts, url_encoding, excessive_backticks, base64_encoded, high_entropy, frontmatter_hooks, inline_commands, Severity, compute_suspicion_level};
+use rules::{Issue, SuspicionLevel, Rule, invisible_chars, non_printable, html_comments, excessive_whitespace, suspicious_keywords, unicode_homoglyphs, mixed_scripts, url_encoding, excessive_backticks, base64_encoded, high_entropy, frontmatter_hooks, frontmatter_validation, inline_commands, Severity, compute_suspicion_level};
 
 #[derive(Parser)]
 #[command(name = "skill-issues")]
@@ -123,6 +123,7 @@ impl Linter {
             Box::new(base64_encoded::Base64EncodedRule),
             Box::new(high_entropy::HighEntropyRule),
             Box::new(frontmatter_hooks::FrontmatterHooksRule),
+            Box::new(frontmatter_validation::FrontmatterValidationRule),
             Box::new(inline_commands::InlineCommandsRule),
         ];
 
@@ -196,6 +197,7 @@ fn generate_sarif(file_results: &[FileResult]) -> sarif::Sarif {
         "invisible-characters",
         "high-entropy",
         "frontmatter-hooks",
+        "frontmatter-validation",
         "inline-commands",
     ]
     .iter()
